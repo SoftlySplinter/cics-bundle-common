@@ -20,6 +20,8 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyManagementException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
@@ -40,9 +42,15 @@ import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuil
 import org.apache.hc.client5.http.ssl.NoopHostnameVerifier;
 import org.apache.hc.client5.http.ssl.SSLConnectionSocketFactoryBuilder;
 import org.apache.hc.client5.http.ssl.TrustAllStrategy;
+import org.apache.hc.core5.http.ClassicHttpResponse;
 import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.Header;
 import org.apache.hc.core5.http.HttpEntity;
+import org.apache.hc.core5.http.HttpException;
+import org.apache.hc.core5.http.HttpHeaders;
+import org.apache.hc.core5.http.HttpStatus;
+import org.apache.hc.core5.http.io.HttpClientResponseHandler;
+import org.apache.hc.core5.http.io.entity.EntityUtils;
 import org.apache.hc.core5.ssl.SSLContextBuilder;
 import org.apache.hc.core5.ssl.SSLContexts;
 
@@ -125,60 +133,74 @@ public class BundleDeployHelper {
 		if (!bundle.exists()) {
 			throw new BundleDeployException("Bundle does not exist: '" + bundle + "'");
 		}
-		
-		
-		
-		CloseableHttpResponse response = httpClient.execute(httpPost);
-		int responseStatusCode = response.getCode();
-		Header[] contentTypeHeaders = response.getHeaders("Content-Type");
-		String contentType;
-		if (contentTypeHeaders.length != 1) {
-			contentType = null;
-		} else {
-			contentType = contentTypeHeaders[0].getValue();
-		}
 
-		if (responseStatusCode != 200) {
-			BufferedReader bufferedReader = new BufferedReader(
-					new InputStreamReader(response.getEntity().getContent(), "UTF-8"));
-			try {
-				String responseContent = bufferedReader.lines().collect(Collectors.joining());
-				if (contentType == null) {
-					throw new BundleDeployException("Http response: " + responseStatusCode);
-				} else if (contentType.equals("application/xml")) {
-					// liberty level error
-					throw new BundleDeployException(responseContent);
-				} else if (contentType.equals("application/json")) {
-					// error from deploy endpoint
-					ObjectMapper objectMapper = new ObjectMapper();
-					String responseMessage = objectMapper.readTree(responseContent).get("message").asText();
-					String responseErrors = "";
-
-					if (responseMessage.contains("Some of the supplied parameters were invalid")) {
-						Iterator<Entry<String, JsonNode>> errorFields = objectMapper.readTree(responseContent)
-								.get("requestErrors").fields();
-						StringBuffer sb = new StringBuffer();
-						while (errorFields.hasNext()) {
-							Entry<String, JsonNode> errorField = errorFields.next();
-							sb.append(errorField.getKey());
-							sb.append(": ");
-							sb.append(errorField.getValue().asText());
-							sb.append('\n');
-						}
-						responseErrors = sb.toString();
-					} else if (responseMessage.contains("Bundle deployment failure")) {
-						responseErrors = objectMapper.readTree(responseContent).get("deployments").findValue("message")
-								.asText();
-					}
-					throw new BundleDeployException(responseMessage + ":\n - " + responseErrors);
-				} else {
-					// CICS level error
-					throw new BundleDeployException(responseContent);
-				}
-			} finally {
-				bufferedReader.close();
-			}
+		CmciResponseHandler handler = new CmciResponseHandler();
+		BundleDeployException exception = httpClient.execute(httpPost, handler);
+		if (exception != null) {
+			throw exception;
 		}
 	}
 
+	private static class CmciResponseHandler implements HttpClientResponseHandler<BundleDeployException> {
+		@Override
+		public BundleDeployException handleResponse(ClassicHttpResponse response) throws HttpException, IOException {
+			// Get the status code of the response.
+			int responseStatusCode = response.getCode();
+
+			// The request succeeded - no more processing.
+			if (responseStatusCode == HttpStatus.SC_OK) {
+				return null;
+			}
+
+			// Get the content type of the request.
+			String contentType = getContentType(response);
+
+			if (contentType == null) {
+				return new BundleDeployException("Http response: " + responseStatusCode);
+			}
+
+			/// Get the content of the response.
+			String responseContent = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
+
+			if (!contentType.equals("application/json")) {
+				// Non-JSON response was produced. The CMCI bundle deploy endpoint should only
+				// produce JSON data, so this idicates that the wrong version of the endpoint is
+				// being used, or a non-CMCI endpoint is being used.
+				return new BundleDeployException(responseContent);
+			}
+
+			// Endpoint returned an error in JSON format - format and wrap into an error.
+			ObjectMapper objectMapper = new ObjectMapper();
+			String responseMessage = objectMapper.readTree(responseContent).get("message").asText();
+			String responseErrors = "";
+
+			if (responseMessage.contains("Some of the supplied parameters were invalid")) {
+				Iterator<Entry<String, JsonNode>> errorFields = objectMapper.readTree(responseContent)
+						.get("requestErrors").fields();
+				StringBuffer sb = new StringBuffer();
+				while (errorFields.hasNext()) {
+					Entry<String, JsonNode> errorField = errorFields.next();
+					sb.append(errorField.getKey());
+					sb.append(": ");
+					sb.append(errorField.getValue().asText());
+					sb.append('\n');
+				}
+				responseErrors = sb.toString();
+			} else if (responseMessage.contains("Bundle deployment failure")) {
+				responseErrors = objectMapper.readTree(responseContent).get("deployments")
+						.findValue("message")
+						.asText();
+			}
+			return new BundleDeployException(responseMessage + ":\n - " + responseErrors);
+		}
+
+		private String getContentType(ClassicHttpResponse response) {
+			Header[] contentTypeHeaders = response.getHeaders(HttpHeaders.CONTENT_TYPE);
+			if (contentTypeHeaders.length != 1) {
+				return null;
+			} else {
+				return contentTypeHeaders[0].getValue();
+			}
+		}
+	}
 }
