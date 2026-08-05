@@ -97,6 +97,7 @@
       <plugin>
         <groupId>com.github.spotbugs</groupId>
         <artifactId>spotbugs-maven-plugin</artifactId>
+        <!-- pinned: spotbugs 4.8+ requires Java 11; project targets Java 8 -->
         <version>4.7.3.4</version>
         <configuration>
           <effort>Max</effort>
@@ -196,7 +197,7 @@
         </plugin>
         <plugin>
           <artifactId>maven-jar-plugin</artifactId>
-          <version>3.5.0</version>
+          <version>3.5.1</version>
         </plugin>
         <plugin>
           <artifactId>maven-resources-plugin</artifactId>
@@ -323,7 +324,7 @@
     <dependency>
       <groupId>org.apache.httpcomponents.client5</groupId>
       <artifactId>httpclient5</artifactId>
-      <version>5.6.2</version>
+      <version>5.6.3</version>
     </dependency>
     <dependency>
       <groupId>org.apache.httpcomponents.core5</groupId>
@@ -352,13 +353,13 @@
     <dependency>
       <groupId>org.xmlunit</groupId>
       <artifactId>xmlunit-core</artifactId>
-      <version>2.12.0</version>
+      <version>2.13.0</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.xmlunit</groupId>
       <artifactId>xmlunit-matchers</artifactId>
-      <version>2.12.0</version>
+      <version>2.13.0</version>
       <scope>test</scope>
     </dependency>
     <dependency>
